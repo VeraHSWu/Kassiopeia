@@ -50,10 +50,10 @@ fi
 export KASPERSYS
 printf "\033[32;1m** KASPER config directory set to ${KASPERSYS}\033[0m\n"
 
-if [ ! -z "${KEMFIELD_CACHE}" -a -w "${KEMFIELD_CACHE}" ]
-    then
-        printf "\033[32;1m** Using KEMField cache in ${KEMFIELD_CACHE}\033[0m\n"
-else
+#if [ ! -z "${KEMFIELD_CACHE}" -a -w "${KEMFIELD_CACHE}" ]
+#    then
+#        printf "\033[32;1m** Using KEMField cache in ${KEMFIELD_CACHE}\033[0m\n"
+#else
     if [ -w "${KASPER_INSTALL_CACHE}/KEMField/" ]
         then
             printf "\033[36;1m** Setting KEMField cache to ${KASPER_INSTALL_CACHE}/KEMField\033[0m\n"
@@ -62,7 +62,7 @@ else
             printf "\033[33;1m** Directory ${KASPER_INSTALL_CACHE}/KEMField/ does not exist or is not writeable, setting KEMField cache to ${HOME}/.cache/KEMField\033[0m\n"
             KEMFIELD_CACHE=${HOME}/.cache/KEMField
     fi
-fi
+#fi
 
 export KEMFIELD_CACHE
 mkdir -p ${KEMFIELD_CACHE}

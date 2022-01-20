@@ -70,7 +70,7 @@ void KGLinearWireGridMesher::VisitWrappedSurface(KGWrappedSurface<KGLinearWireGr
         // std::cout << yIt << "\t" << height << "\t" << xLengthIt << std::endl;
 
         //  number of discretized wires = ( segment length / Radius ) * (number of wires at y=0)
-        unsigned int xDiscIt = (xLengthIt / maxR) * nWires;
+        unsigned int xDiscIt = (xLengthIt / (2. * maxR)) * nDisc;
         // std::cout << "unsigned int xDiscIt = " << xDiscIt << std::endl;
 
         // compute discretization interval segments
