@@ -2,7 +2,7 @@ cmake_minimum_required( VERSION ${CMAKE_MINIMUM_VERSION} )
 
 # Kommon version
 set( MODULE_VERSION_MAJOR 1 )
-set( MODULE_VERSION_MINOR 5 )
+set( MODULE_VERSION_MINOR 6 )
 set( MODULE_VERSION_PATCH 0 )
 set( MODULE_VERSION "${MODULE_VERSION_MAJOR}.${MODULE_VERSION_MINOR}.${MODULE_VERSION_PATCH}" )
 
@@ -20,6 +20,9 @@ kasper_module_debug()
 # # to be populated by subdirectories
 # set(KOMMON_HEADER_FILES)
 # set(KOMMON_SOURCE_FILES)
+
+set( KASPER_USE_TBB OFF CACHE BOOL "Use the Intel TBB library in Kommon")
+mark_as_advanced( FORCE KASPER_USE_TBB )
 
 # subdirectories
 add_subdirectory( cmake )

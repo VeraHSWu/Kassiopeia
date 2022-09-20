@@ -64,28 +64,32 @@ std::string KStaticElectromagnetField::GetFile() const
     return fFile;
 }
 
-void KStaticElectromagnetField::SetFieldSolver(const KSmartPointer<KMagneticFieldSolver>& solver)
+void KStaticElectromagnetField::SetFieldSolver(const std::shared_ptr<KMagneticFieldSolver>& solver)
 {
     fFieldSolver = solver;
 }
 
-KSmartPointer<KMagneticFieldSolver> KStaticElectromagnetField::GetFieldSolver()
+std::shared_ptr<KMagneticFieldSolver> KStaticElectromagnetField::GetFieldSolver()
 {
     return fFieldSolver;
 }
 
-void KStaticElectromagnetField::SetContainer(const KSmartPointer<KElectromagnetContainer>& aContainer)
+void KStaticElectromagnetField::SetContainer(const std::shared_ptr<KElectromagnetContainer>& aContainer)
 {
     fContainer = aContainer;
 }
 
-KSmartPointer<KElectromagnetContainer> KStaticElectromagnetField::GetContainer() const
+std::shared_ptr<KElectromagnetContainer> KStaticElectromagnetField::GetContainer() const
 {
     return fContainer;
 }
 
 void KStaticElectromagnetField::InitializeCore()
 {
+    if (fContainer->empty()) {
+        kem_cout(eError) << "ERROR: Electromagnet solver got no current elements (did you forget to define magnets?)" << eom;
+    }
+
     CheckSolverExistance();
 
     KEMFileInterface::GetInstance()->ActiveDirectory(fDirectory);

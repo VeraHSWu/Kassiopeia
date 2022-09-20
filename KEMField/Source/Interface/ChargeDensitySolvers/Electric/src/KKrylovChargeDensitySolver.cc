@@ -24,23 +24,27 @@ KKrylovChargeDensitySolver::KKrylovChargeDensitySolver()
 
 KKrylovChargeDensitySolver::~KKrylovChargeDensitySolver() = default;
 
-void KKrylovChargeDensitySolver::SetMatrixGenerator(const KSmartPointer<MatrixGenerator>& matrixGen)
+void KKrylovChargeDensitySolver::SetMatrixGenerator(const std::shared_ptr<MatrixGenerator>& matrixGen)
 {
     fMatrixGenerator = matrixGen;
 }
 
-KSmartPointer<const KKrylovChargeDensitySolver::MatrixGenerator> KKrylovChargeDensitySolver::GetMatrixGenerator() const
+std::shared_ptr<const KKrylovChargeDensitySolver::MatrixGenerator> KKrylovChargeDensitySolver::GetMatrixGenerator() const
 {
     return fMatrixGenerator;
 }
 
-void KKrylovChargeDensitySolver::SetPreconditionerGenerator(const KSmartPointer<MatrixGenerator>& preconGen)
+void KKrylovChargeDensitySolver::SetPreconditionerGenerator(const std::shared_ptr<MatrixGenerator>& preconGen)
 {
     fPreconditionerGenerator = preconGen;
 }
 
 void KKrylovChargeDensitySolver::ComputeSolution(KSurfaceContainer& container)
 {
+    if (container.empty()) {
+        kem_cout(eError) << "ERROR: Krylov solver got no electrode elements (did you forget to setup a geometry mesh?)" << eom;
+    }
+
     /* Here I assume that the electrostatic vector space basis consists of one
      * ValueType per surface element and that these are arranged in the same order
      * as in the KSurface container. */
@@ -49,15 +53,15 @@ void KKrylovChargeDensitySolver::ComputeSolution(KSurfaceContainer& container)
     // Therefore, using simply default.
     KElectrostaticBoundaryIntegrator integrator{KEBIFactory::MakeDefault()};
 
-    KSmartPointer<KSquareMatrix<ValueType>> A = fMatrixGenerator->Build(container);
-    KSmartPointer<KSquareMatrix<ValueType>> P;
-    if (fPreconditionerGenerator.Is())
+    std::shared_ptr<KSquareMatrix<ValueType>> A = fMatrixGenerator->Build(container);
+    std::shared_ptr<KSquareMatrix<ValueType>> P;
+    if (fPreconditionerGenerator)
         P = fPreconditionerGenerator->Build(container);
 
     KBoundaryIntegralSolutionVector<KElectrostaticBoundaryIntegrator> x(container, integrator);
     KBoundaryIntegralVector<KElectrostaticBoundaryIntegrator> b(container, integrator);
 
-    KSmartPointer<KIterativeKrylovSolver<ValueType>> solver = KBuildKrylovSolver<ValueType>(fKrylovConfig, A, P);
+    auto solver = KBuildKrylovSolver<ValueType>(fKrylovConfig, A, P);
     solver->Solve(x, b);
     SaveSolution(solver->ResidualNorm(), container);
 }
@@ -65,7 +69,7 @@ void KKrylovChargeDensitySolver::ComputeSolution(KSurfaceContainer& container)
 void KKrylovChargeDensitySolver::InitializeCore(KSurfaceContainer& container)
 {
     if (container.empty()) {
-        kem_cout(eWarning) << "Krylov solver got no elctrode elements (did you forget to setup a geometry mesh?)" << eom;
+        kem_cout(eError) << "ERROR: Krylov solver got no electrode elements (did you forget to setup a geometry mesh?)" << eom;
     }
 
     if (!FindSolution(fKrylovConfig.GetTolerance(), container))
