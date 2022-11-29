@@ -203,8 +203,8 @@ Optional Dependencies:
  Open Source
 -------------
 
-This software is distributed "as-is" under an open source license
-(MIT License, for details see `LICENSE.md` file.)
+This software is distributed "as-is" under an open source license;
+for details see `LICENSE.md` file.
 
 Kassiopeia includes the following open-source libraries:
 
