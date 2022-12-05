@@ -8,6 +8,7 @@ if (KGeoBag_ENABLE_APP)
         MetricsExtensionTester
         EulerAngles
         GeometryDump
+        MergeTriangles
     )
 
     # libraries
