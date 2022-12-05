@@ -4,14 +4,15 @@ using katrin::KThreeVector;
 
 namespace KGeoBag
 {
-KGRectangle::KGRectangle(const double& a, const double& b, const KThreeVector& p0, const KThreeVector& n1,
-                         const KThreeVector& n2)
+KGRectangle::KGRectangle(const double& a, const double& b, const KThreeVector& p0,
+                         const KThreeVector& n1, const KThreeVector& n2)
 {
     fA = a;
     fB = b;
     fP0 = p0;
     fN1 = n1;
     fN2 = n2;
+    Update();
 }
 
 KGRectangle::KGRectangle(const KThreeVector& p0, const KThreeVector& p1, const KThreeVector& /*p2*/,
@@ -24,20 +25,28 @@ KGRectangle::KGRectangle(const KThreeVector& p0, const KThreeVector& p1, const K
     fN2 = p3 - p0;
     fB = fN2.Magnitude();
     fN2 = fN2.Unit();
+    Update();
 }
 
+KGRectangle::KGRectangle(const KGRectangle& r) :
+    KGRectangle(r.fA, r.fB, r.fP0, r.fN1, r.fN2)
+{}
 
-//  KGRectangle* KGRectangle::AreaClone() const
-//  {
-//    KGRectangle* r = new KGRectangle();
-//    r->fA = fA;
-//    r->fB = fB;
-//    r->fP0 = fP0;
-//    r->fN1 = fN1;
-//    r->fN2 = fN2;
-//
-//    return r;
-//  }
+KGRectangle& KGRectangle::operator=(const KGRectangle& r)
+{
+    if (this == &r)
+        return *this;
+
+    fA = r.fA;
+    fB = r.fB;
+    fP0 = r.fP0;
+    fN1 = r.fN1;
+    fN2 = r.fN2;
+    fN3 = r.fN3;
+    Update();
+
+    return *this;
+}
 
 void KGRectangle::AreaAccept(KGVisitor* aVisitor)
 {

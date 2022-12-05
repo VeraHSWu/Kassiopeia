@@ -20,11 +20,10 @@ class KGRectangle : public KGArea
     };
 
     KGRectangle() = default;
-    KGRectangle(const double& a, const double& b, const katrin::KThreeVector& p0, const katrin::KThreeVector& n1,
-                const katrin::KThreeVector& n2);
-
-    KGRectangle(const katrin::KThreeVector& p0, const katrin::KThreeVector& p1, const katrin::KThreeVector& p2,
-                const katrin::KThreeVector& p3);
+    KGRectangle(const double& a, const double& b, const katrin::KThreeVector& p0, const katrin::KThreeVector& n1, const katrin::KThreeVector& n2);
+    KGRectangle(const katrin::KThreeVector& p0, const katrin::KThreeVector& p1, const katrin::KThreeVector& p2, const katrin::KThreeVector& p3);
+    KGRectangle(const KGRectangle& r);
+    KGRectangle& operator=(const KGRectangle& r);
 
     ~KGRectangle() override = default;
 
@@ -34,25 +33,48 @@ class KGRectangle : public KGArea
     katrin::KThreeVector AreaPoint(const katrin::KThreeVector& aPoint) const override;
     katrin::KThreeVector AreaNormal(const katrin::KThreeVector& aPoint) const override;
 
+    void FlipSurface()
+    {
+        double a = fA, b = fB;
+        katrin::KThreeVector n1 = fN1, n2 = fN2;
+
+        fA = b; fB = a;
+        fN1 = n2; fN2 = n1;
+        Update();
+    }
+
+    void Update()
+    {
+        fN3 = fN1.Cross(fN2).Unit();
+        fP1 = fP0 + fN1 * fA;
+        fP2 = fP0 + fN1 * fA + fN2 * fB;
+        fP3 = fP0 + fN2 * fB;;
+    }
+
     void SetA(double d)
     {
         fA = d;
+        Update();
     }
     void SetB(double d)
     {
         fB = d;
+        Update();
     }
     void SetP0(const katrin::KThreeVector& p)
     {
         fP0 = p;
+        Update();
     }
     void SetN1(const katrin::KThreeVector& d)
     {
         fN1 = d.Unit();
+        Update();
     }
     void SetN2(const katrin::KThreeVector& d)
     {
         fN2 = d.Unit();
+        Update();
     }
 
     double GetA() const
@@ -77,19 +99,19 @@ class KGRectangle : public KGArea
     }
     const katrin::KThreeVector GetN3() const
     {
-        return fN1.Cross(fN2);
+        return fN3;
     }
     const katrin::KThreeVector GetP1() const
     {
-        return fP0 + fN1 * fA;
+        return fP1;
     }
     const katrin::KThreeVector GetP2() const
     {
-        return fP0 + fN1 * fA + fN2 * fB;
+        return fP2;
     }
     const katrin::KThreeVector GetP3() const
     {
-        return fP0 + fN2 * fB;
+        return fP3;
     }
 
     virtual bool ContainsPoint(const katrin::KThreeVector& aPoint) const;
@@ -100,11 +122,9 @@ class KGRectangle : public KGArea
                        const katrin::KThreeVector& B, const katrin::KThreeVector& C);
 
   private:
-    double fA;
-    double fB;
-    katrin::KThreeVector fP0;
-    katrin::KThreeVector fN1;
-    katrin::KThreeVector fN2;
+    double fA, fB;
+    katrin::KThreeVector fP0, fP1, fP2, fP3;
+    katrin::KThreeVector fN1, fN2, fN3;
 };
 }  // namespace KGeoBag
 

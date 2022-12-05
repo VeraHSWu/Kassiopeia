@@ -12,7 +12,7 @@ void KRectangle::SetValues(const double& a, const double& b, const KPosition& p0
     fP0 = p0;
     fN1 = n1;
     fN2 = n2;
-    fN3 = fN1.Cross(fN2);
+    fN3 = fN1.Cross(fN2).Unit();
 }
 
 void KRectangle::SetValues(const KPosition& p0, const KPosition& p1, const KPosition& /*p2*/, const KPosition& p3)
@@ -24,7 +24,7 @@ void KRectangle::SetValues(const KPosition& p0, const KPosition& p1, const KPosi
     fN2 = p3 - p0;
     fB = fN2.Magnitude();
     fN2 = fN2.Unit();
-    fN3 = fN1.Cross(fN2);
+    fN3 = fN1.Cross(fN2).Unit();
 }
 
 /**
