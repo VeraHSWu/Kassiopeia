@@ -153,7 +153,7 @@ void KGStlFile::ReadStlFile() const
         }
     }
     else {
-        tFile = string(DATA_DEFAULT_DIR) + string("/") + GetName() + string(".vtp");
+        tFile = string(DATA_DEFAULT_DIR) + string("/") + GetName() + string(".stl");
     }
 
     coremsg_debug("reading elements from STL file <" << tFile << ">" << eom);
