@@ -1,4 +1,5 @@
 #include "KGRectangle.hh"
+#include "KException.h"
 
 using katrin::KThreeVector;
 
@@ -15,8 +16,7 @@ KGRectangle::KGRectangle(const double& a, const double& b, const KThreeVector& p
     Update();
 }
 
-KGRectangle::KGRectangle(const KThreeVector& p0, const KThreeVector& p1, const KThreeVector& /*p2*/,
-                         const KThreeVector& p3)
+KGRectangle::KGRectangle(const KThreeVector& p0, const KThreeVector& p1, const KThreeVector& p2, const KThreeVector& p3)
 {
     fP0 = p0;
     fN1 = p1 - p0;
@@ -25,6 +25,10 @@ KGRectangle::KGRectangle(const KThreeVector& p0, const KThreeVector& p1, const K
     fN2 = p3 - p0;
     fB = fN2.Magnitude();
     fN2 = fN2.Unit();
+
+    if (fabs((p2 - p1).MagnitudeSquared() - fB*fB) > 1e-12 || fabs((p2 - p3).MagnitudeSquared() - fA*fA) > 1e-12)
+        throw katrin::KException() << "invalid KGRectangle: sides must be parallel";
+
     Update();
 }
 
