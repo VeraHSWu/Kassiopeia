@@ -13,6 +13,12 @@
 #include "../../Shapes/External/Source/happly.h"
 #include "../../Shapes/External/Source/stl_reader.h"
 
+#include <utility>
+
+#ifdef USE_OPENMP
+#include <omp.h>
+#endif
+
 using namespace KGeoBag;
 using namespace katrin;
 using namespace std;
@@ -31,16 +37,16 @@ public:
     void writePlyFile(const string& aFilename, happly::DataFormat aFormat = happly::DataFormat::Binary);
 
     /// try to merge KGTriangle pairs into single KGRectangle; optionally check surface normals
-    void mergeFaces(bool aCheckNormals = true);
+    void mergeFaces(bool aCheckNormals = true, bool checkDistance = true);
 
 public:
     KGTriangleMerger() = default;
     ~KGTriangleMerger() = default;
 
-    const std::vector<KGTriangle>& GetTriangles() { return fTriangles; }
-    const std::vector<KGRectangle>& GetRectangles() { return fRectangles; }
-    const std::vector<std::array<double, 3>>& GetVertices() { return fVertices; }
-    const std::vector<std::vector<size_t>>& GetFaces() { return fFaces; }
+    std::vector<KGTriangle>& GetTriangles() { return fTriangles; }
+    std::vector<KGRectangle>& GetRectangles() { return fRectangles; }
+    std::vector<std::array<double, 3>>& GetVertices() { return fVertices; }
+    std::vector<std::vector<size_t>>& GetFaces() { return fFaces; }
 
 protected:
     /// create KGTriangle from STL mesh element
@@ -61,8 +67,11 @@ protected:
     /// get vertex index for given point (avoids duplicate vertices)
     size_t getVertexIndex(const KThreeVector& aVector);
 
+    /// compare scalar equality
+    inline bool nearlyEqual(const double& a1, const double& a2, double epsilon = 1.e-10f) const;
+
     /// compare vector equality
-    inline bool nearlyEqual(const KThreeVector& a1, const KThreeVector& a2, double epsilon = 1.e-12f) const;
+    inline bool nearlyEqual(const KThreeVector& a1, const KThreeVector& a2, double epsilon = 1.e-10f) const;
 
 private:
     std::string fInputFilename;
@@ -132,7 +141,7 @@ KGRectangle KGTriangleMerger::GetRectangle(const std::vector<std::array<ValueT, 
         p[icorner] = vertices[indices[icorner]];
     }
 
-    KGRectangle rect = KGRectangle(p[0] * scale, p[1] * scale, p[2] * scale, p[3] * scale);
+    auto rect = KGRectangle(p[0] * scale, p[1] * scale, p[2] * scale, p[3] * scale);
 
     return rect;
 }
@@ -167,6 +176,12 @@ size_t KGTriangleMerger::getVertexIndex(const KThreeVector& aVector)
     }
 
     return index;
+}
+
+/// compare scalar equality
+inline bool KGTriangleMerger::nearlyEqual(const double& a1, const double& a2, double epsilon) const
+{
+    return (fabs(a1 - a2) < epsilon) ? true : false;
 }
 
 /// compare vector equality
@@ -268,6 +283,8 @@ void KGTriangleMerger::writePlyFile(const string& aFilename, happly::DataFormat 
     fVertices.clear();
     fFaces.clear();
 
+    fFaces.reserve(fTriangles.size() + fRectangles.size());
+
     // create list of indices for all triangle surfaces
     for (auto & tri : fTriangles) {
         std::vector<size_t> indices;
@@ -305,222 +322,274 @@ void KGTriangleMerger::writePlyFile(const string& aFilename, happly::DataFormat 
 }
 
 /// try to merge KGTriangle pairs into single KGRectangle; optionally check surface normals
-void KGTriangleMerger::mergeFaces(bool aCheckNormals)
+void KGTriangleMerger::mergeFaces(bool aCheckNormals, bool checkDistance)
 {
     // prepare internal buffers
-    std::unordered_map<size_t, bool> merged_faces;
     std::vector<KGTriangle> triangles_out;
     std::vector<KGRectangle> rectangles_out;
+    std::vector<std::pair<KThreeVector,double>> bounding_spheres;  // center + radius
+    std::vector<bool> merged_faces;  // flag
 
     const size_t total_faces = fTriangles.size() + fRectangles.size();
-    size_t mismatching_normals = 0;
+    size_t merged_count = 0;
+
+    triangles_out.reserve(total_faces);
+    rectangles_out.reserve(total_faces);
+    bounding_spheres.reserve(total_faces);
+    merged_faces.reserve(total_faces);
+
+    // fill internal buffers
+    std::fill_n(merged_faces.begin(), total_faces, false);
+
+    if (checkDistance) {
+        std::transform(fTriangles.cbegin(), fTriangles.cend(), bounding_spheres.begin(),
+                       [](const KGTriangle& t)
+        {
+            KThreeVector C = t.GetP0() + (t.GetA() * t.GetN1() + t.GetB() * t.GetN2()) / 3.;  // centroid
+            double R = sqrt(fmax((t.GetP0() - C).MagnitudeSquared(),
+                                 fmax((t.GetP1() - C).MagnitudeSquared(),
+                                      (t.GetP2() - C).MagnitudeSquared())));
+            return std::make_pair(C, R);
+        });
+    }
 
     // outer loop over all triangles from input
     for (size_t i = 0; i < fTriangles.size(); ++i) {
-        if (i % 100 == 0)
-            progressBar(i, total_faces) << " (scanned: " << i << ", merged: " << merged_faces.size() << ")" << std::flush;
 
-        if (merged_faces.find(i) != merged_faces.end())
+        if (i % 100 == 0)
+            progressBar(i, total_faces) << " (scanned: " << i << ", merged: " << merged_count << ")" << std::flush;
+
+        if (merged_faces[i])
             continue;
 
         auto& tri1 = fTriangles[i];
-        bool is_merged = false;
+        KThreeVector& p1 = bounding_spheres[i].first;
+        double& r1 = bounding_spheres[i].second;
 
+        volatile bool is_merged = false;
+
+#ifdef USE_OPENMP
+#pragma omp parallel for shared(is_merged)
+#endif
         // inner loop over all REMAINING (not yet compared) triangles
         for (size_t j = i+1; j < fTriangles.size(); ++j) {
 
-            if (merged_faces.find(j) != merged_faces.end())
+            if (is_merged || merged_faces[j])
                 continue;
 
             auto& tri2 = fTriangles[j];
+            KThreeVector& p2 = bounding_spheres[j].first;
+            double& r2 = bounding_spheres[j].second;
+
+            // check (1): triangles must be close to each other
+            if (checkDistance && (p1 - p2).MagnitudeSquared() > (r1 + r2) * (r1 + r2)) {
+                continue;
+            }
+
+            // check (2): surface normals of triangles must match
+            if (aCheckNormals && ! nearlyEqual(tri1.GetN3(), tri2.GetN3())) {
+                continue;
+            }
 
             // try to find rectangle that matches all 6 triangle vertices
-            auto rect = KGRectangle();
+            std::array<KThreeVector, 4> points;
 
             //--------------
             // 0-1-2 + 0-1-2
             /**/ if (nearlyEqual(tri1.GetP0(), tri2.GetP2()) && nearlyEqual(tri1.GetP2(), tri2.GetP0()))
-                rect = KGRectangle(tri1.GetP0(), tri1.GetP1(), tri1.GetP2(), tri2.GetP1());
+                points = { tri1.GetP0(), tri1.GetP1(), tri1.GetP2(), tri2.GetP1() };
 
             // 0-1-2 + 1-2-0
             else if (nearlyEqual(tri1.GetP0(), tri2.GetP0()) && nearlyEqual(tri1.GetP2(), tri2.GetP1()))
-                rect = KGRectangle(tri1.GetP0(), tri1.GetP1(), tri1.GetP2(), tri2.GetP2());
+                points = { tri1.GetP0(), tri1.GetP1(), tri1.GetP2(), tri2.GetP2() };
 
             // 0-1-2 + 2-0-1
             else if (nearlyEqual(tri1.GetP0(), tri2.GetP1()) && nearlyEqual(tri1.GetP2(), tri2.GetP2()))
-                rect = KGRectangle(tri1.GetP0(), tri1.GetP1(), tri1.GetP2(), tri2.GetP0());
+                points = { tri1.GetP0(), tri1.GetP1(), tri1.GetP2(), tri2.GetP0() };
 
             // 0-1-2 + 2-1-0
             else if (nearlyEqual(tri1.GetP0(), tri2.GetP0()) && nearlyEqual(tri1.GetP2(), tri2.GetP2()))
-                rect = KGRectangle(tri1.GetP0(), tri1.GetP1(), tri1.GetP2(), tri2.GetP1());
+                points = { tri1.GetP0(), tri1.GetP1(), tri1.GetP2(), tri2.GetP1() };
 
             // 0-1-2 + 0-2-1
             else if (nearlyEqual(tri1.GetP0(), tri2.GetP1()) && nearlyEqual(tri1.GetP2(), tri2.GetP0()))
-                rect = KGRectangle(tri1.GetP0(), tri1.GetP1(), tri1.GetP2(), tri2.GetP2());
+                points = { tri1.GetP0(), tri1.GetP1(), tri1.GetP2(), tri2.GetP2() };
 
             // 0-1-2 + 1-0-2
             else if (nearlyEqual(tri1.GetP0(), tri2.GetP2()) && nearlyEqual(tri1.GetP2(), tri2.GetP1()))
-                rect = KGRectangle(tri1.GetP0(), tri1.GetP1(), tri1.GetP2(), tri2.GetP0());
+                points = { tri1.GetP0(), tri1.GetP1(), tri1.GetP2(), tri2.GetP0() };
 
             //--------------
             // 1-2-0 + 0-1-2
             else if (nearlyEqual(tri1.GetP1(), tri2.GetP2()) && nearlyEqual(tri1.GetP0(), tri2.GetP0()))
-                rect = KGRectangle(tri1.GetP1(), tri1.GetP2(), tri1.GetP0(), tri2.GetP1());
+                points = { tri1.GetP1(), tri1.GetP2(), tri1.GetP0(), tri2.GetP1() };
 
             // 1-2-0 + 1-2-0
             else if (nearlyEqual(tri1.GetP1(), tri2.GetP0()) && nearlyEqual(tri1.GetP0(), tri2.GetP1()))
-                rect = KGRectangle(tri1.GetP1(), tri1.GetP2(), tri1.GetP0(), tri2.GetP2());
+                points = { tri1.GetP1(), tri1.GetP2(), tri1.GetP0(), tri2.GetP2() };
 
             // 1-2-0 + 2-0-1
             else if (nearlyEqual(tri1.GetP1(), tri2.GetP1()) && nearlyEqual(tri1.GetP0(), tri2.GetP2()))
-                rect = KGRectangle(tri1.GetP1(), tri1.GetP2(), tri1.GetP0(), tri2.GetP0());
+                points = { tri1.GetP1(), tri1.GetP2(), tri1.GetP0(), tri2.GetP0() };
 
             // 1-2-0 + 2-1-0
             else if (nearlyEqual(tri1.GetP1(), tri2.GetP0()) && nearlyEqual(tri1.GetP0(), tri2.GetP2()))
-                rect = KGRectangle(tri1.GetP1(), tri1.GetP2(), tri1.GetP0(), tri2.GetP1());
+                points = { tri1.GetP1(), tri1.GetP2(), tri1.GetP0(), tri2.GetP1() };
 
             // 1-2-0 + 0-2-1
             else if (nearlyEqual(tri1.GetP1(), tri2.GetP1()) && nearlyEqual(tri1.GetP0(), tri2.GetP0()))
-                rect = KGRectangle(tri1.GetP1(), tri1.GetP2(), tri1.GetP0(), tri2.GetP2());
+                points = { tri1.GetP1(), tri1.GetP2(), tri1.GetP0(), tri2.GetP2() };
 
             // 1-2-0 + 1-0-2
             else if (nearlyEqual(tri1.GetP1(), tri2.GetP2()) && nearlyEqual(tri1.GetP0(), tri2.GetP1()))
-                rect = KGRectangle(tri1.GetP1(), tri1.GetP2(), tri1.GetP0(), tri2.GetP0());
+                points = { tri1.GetP1(), tri1.GetP2(), tri1.GetP0(), tri2.GetP0() };
 
             //--------------
             // 2-0-1 + 0-1-2
             else if (nearlyEqual(tri1.GetP2(), tri2.GetP2()) && nearlyEqual(tri1.GetP1(), tri2.GetP0()))
-                rect = KGRectangle(tri1.GetP2(), tri1.GetP0(), tri1.GetP1(), tri2.GetP1());
+                points = { tri1.GetP2(), tri1.GetP0(), tri1.GetP1(), tri2.GetP1() };
 
             // 2-0-1 + 1-2-0
             else if (nearlyEqual(tri1.GetP2(), tri2.GetP0()) && nearlyEqual(tri1.GetP1(), tri2.GetP1()))
-                rect = KGRectangle(tri1.GetP2(), tri1.GetP0(), tri1.GetP1(), tri2.GetP2());
+                points = { tri1.GetP2(), tri1.GetP0(), tri1.GetP1(), tri2.GetP2() };
 
             // 2-0-1 + 2-0-1
             else if (nearlyEqual(tri1.GetP2(), tri2.GetP1()) && nearlyEqual(tri1.GetP1(), tri2.GetP2()))
-                rect = KGRectangle(tri1.GetP2(), tri1.GetP0(), tri1.GetP1(), tri2.GetP0());
+                points = { tri1.GetP2(), tri1.GetP0(), tri1.GetP1(), tri2.GetP0() };
 
             // 2-0-1 + 2-1-0
             else if (nearlyEqual(tri1.GetP2(), tri2.GetP0()) && nearlyEqual(tri1.GetP1(), tri2.GetP2()))
-                rect = KGRectangle(tri1.GetP2(), tri1.GetP0(), tri1.GetP1(), tri2.GetP1());
+                points = { tri1.GetP2(), tri1.GetP0(), tri1.GetP1(), tri2.GetP1() };
 
             // 2-0-1 + 0-2-1
             else if (nearlyEqual(tri1.GetP2(), tri2.GetP1()) && nearlyEqual(tri1.GetP1(), tri2.GetP0()))
-                rect = KGRectangle(tri1.GetP2(), tri1.GetP0(), tri1.GetP1(), tri2.GetP2());
+                points = { tri1.GetP2(), tri1.GetP0(), tri1.GetP1(), tri2.GetP2() };
 
             // 2-0-1 + 1-0-2
             else if (nearlyEqual(tri1.GetP2(), tri2.GetP2()) && nearlyEqual(tri1.GetP1(), tri2.GetP1()))
-                rect = KGRectangle(tri1.GetP2(), tri1.GetP0(), tri1.GetP1(), tri2.GetP0());
+                points = { tri1.GetP2(), tri1.GetP0(), tri1.GetP1(), tri2.GetP0() };
 
             //--------------
             // 0-2-1 + 0-1-2
             else if (nearlyEqual(tri1.GetP0(), tri2.GetP2()) && nearlyEqual(tri1.GetP1(), tri2.GetP0()))
-                rect = KGRectangle(tri1.GetP0(), tri1.GetP2(), tri1.GetP1(), tri2.GetP1());
+                points = { tri1.GetP0(), tri1.GetP2(), tri1.GetP1(), tri2.GetP1() };
 
             // 0-2-1 + 1-2-0
             else if (nearlyEqual(tri1.GetP0(), tri2.GetP0()) && nearlyEqual(tri1.GetP1(), tri2.GetP1()))
-                rect = KGRectangle(tri1.GetP0(), tri1.GetP2(), tri1.GetP1(), tri2.GetP2());
+                points = { tri1.GetP0(), tri1.GetP2(), tri1.GetP1(), tri2.GetP2() };
 
             // 0-2-1 + 2-0-1
             else if (nearlyEqual(tri1.GetP0(), tri2.GetP1()) && nearlyEqual(tri1.GetP1(), tri2.GetP2()))
-                rect = KGRectangle(tri1.GetP0(), tri1.GetP2(), tri1.GetP1(), tri2.GetP0());
+                points = { tri1.GetP0(), tri1.GetP2(), tri1.GetP1(), tri2.GetP0() };
 
             // 0-2-1 + 2-1-0
             else if (nearlyEqual(tri1.GetP0(), tri2.GetP0()) && nearlyEqual(tri1.GetP1(), tri2.GetP2()))
-                rect = KGRectangle(tri1.GetP0(), tri1.GetP2(), tri1.GetP1(), tri2.GetP1());
+                points = { tri1.GetP0(), tri1.GetP2(), tri1.GetP1(), tri2.GetP1() };
 
             // 0-2-1 + 0-2-1
             else if (nearlyEqual(tri1.GetP0(), tri2.GetP1()) && nearlyEqual(tri1.GetP1(), tri2.GetP0()))
-                rect = KGRectangle(tri1.GetP0(), tri1.GetP2(), tri1.GetP1(), tri2.GetP2());
+                points = { tri1.GetP0(), tri1.GetP2(), tri1.GetP1(), tri2.GetP2() };
 
             // 0-2-1 + 1-0-2
             else if (nearlyEqual(tri1.GetP0(), tri2.GetP2()) && nearlyEqual(tri1.GetP1(), tri2.GetP1()))
-                rect = KGRectangle(tri1.GetP0(), tri1.GetP2(), tri1.GetP1(), tri2.GetP0());
+                points = { tri1.GetP0(), tri1.GetP2(), tri1.GetP1(), tri2.GetP0() };
 
             //--------------
             // 1-0-2 + 0-1-2
             else if (nearlyEqual(tri1.GetP1(), tri2.GetP2()) && nearlyEqual(tri1.GetP2(), tri2.GetP0()))
-                rect = KGRectangle(tri1.GetP1(), tri1.GetP0(), tri1.GetP2(), tri2.GetP1());
+                points = { tri1.GetP1(), tri1.GetP0(), tri1.GetP2(), tri2.GetP1() };
 
             // 1-0-2 + 1-2-0
             else if (nearlyEqual(tri1.GetP1(), tri2.GetP0()) && nearlyEqual(tri1.GetP2(), tri2.GetP1()))
-                rect = KGRectangle(tri1.GetP1(), tri1.GetP0(), tri1.GetP2(), tri2.GetP2());
+                points = { tri1.GetP1(), tri1.GetP0(), tri1.GetP2(), tri2.GetP2() };
 
             // 1-0-2 + 2-0-1
             else if (nearlyEqual(tri1.GetP1(), tri2.GetP1()) && nearlyEqual(tri1.GetP2(), tri2.GetP2()))
-                rect = KGRectangle(tri1.GetP1(), tri1.GetP0(), tri1.GetP2(), tri2.GetP0());
+                points = { tri1.GetP1(), tri1.GetP0(), tri1.GetP2(), tri2.GetP0() };
 
             // 1-0-2 + 2-1-0
             else if (nearlyEqual(tri1.GetP1(), tri2.GetP0()) && nearlyEqual(tri1.GetP2(), tri2.GetP2()))
-                rect = KGRectangle(tri1.GetP1(), tri1.GetP0(), tri1.GetP2(), tri2.GetP1());
+                points = { tri1.GetP1(), tri1.GetP0(), tri1.GetP2(), tri2.GetP1() };
 
             // 1-0-2 + 0-2-1
             else if (nearlyEqual(tri1.GetP1(), tri2.GetP1()) && nearlyEqual(tri1.GetP2(), tri2.GetP0()))
-                rect = KGRectangle(tri1.GetP1(), tri1.GetP0(), tri1.GetP2(), tri2.GetP2());
+                points = { tri1.GetP1(), tri1.GetP0(), tri1.GetP2(), tri2.GetP2() };
 
             // 1-0-2 + 1-0-2
             else if (nearlyEqual(tri1.GetP1(), tri2.GetP2()) && nearlyEqual(tri1.GetP2(), tri2.GetP1()))
-                rect = KGRectangle(tri1.GetP1(), tri1.GetP0(), tri1.GetP2(), tri2.GetP0());
+                points = { tri1.GetP1(), tri1.GetP0(), tri1.GetP2(), tri2.GetP0() };
 
             //--------------
             // 2-1-0 + 0-1-2
             else if (nearlyEqual(tri1.GetP2(), tri2.GetP2()) && nearlyEqual(tri1.GetP0(), tri2.GetP0()))
-                rect = KGRectangle(tri1.GetP2(), tri1.GetP1(), tri1.GetP0(), tri2.GetP1());
+                points = { tri1.GetP2(), tri1.GetP1(), tri1.GetP0(), tri2.GetP1() };
 
             // 2-1-0 + 1-2-0
             else if (nearlyEqual(tri1.GetP2(), tri2.GetP0()) && nearlyEqual(tri1.GetP0(), tri2.GetP1()))
-                rect = KGRectangle(tri1.GetP2(), tri1.GetP1(), tri1.GetP0(), tri2.GetP2());
+                points = { tri1.GetP2(), tri1.GetP1(), tri1.GetP0(), tri2.GetP2() };
 
             // 2-1-0 + 2-0-1
             else if (nearlyEqual(tri1.GetP2(), tri2.GetP1()) && nearlyEqual(tri1.GetP0(), tri2.GetP2()))
-                rect = KGRectangle(tri1.GetP2(), tri1.GetP1(), tri1.GetP0(), tri2.GetP0());
+                points = { tri1.GetP2(), tri1.GetP1(), tri1.GetP0(), tri2.GetP0() };
 
             // 2-1-0 + 2-1-0
             else if (nearlyEqual(tri1.GetP2(), tri2.GetP0()) && nearlyEqual(tri1.GetP0(), tri2.GetP2()))
-                rect = KGRectangle(tri1.GetP2(), tri1.GetP1(), tri1.GetP0(), tri2.GetP1());
+                points = { tri1.GetP2(), tri1.GetP1(), tri1.GetP0(), tri2.GetP1() };
 
             // 2-1-0 + 0-2-1
             else if (nearlyEqual(tri1.GetP2(), tri2.GetP1()) && nearlyEqual(tri1.GetP0(), tri2.GetP0()))
-                rect = KGRectangle(tri1.GetP2(), tri1.GetP1(), tri1.GetP0(), tri2.GetP2());
+                points = { tri1.GetP2(), tri1.GetP1(), tri1.GetP0(), tri2.GetP2() };
 
             // 2-1-0 + 1-0-2
             else if (nearlyEqual(tri1.GetP2(), tri2.GetP2()) && nearlyEqual(tri1.GetP0(), tri2.GetP1()))
-                rect = KGRectangle(tri1.GetP2(), tri1.GetP1(), tri1.GetP0(), tri2.GetP0());
+                points = { tri1.GetP2(), tri1.GetP1(), tri1.GetP0(), tri2.GetP0() };
 
             //--------------
             else
                 continue;
 
-            if (rect.GetA() == 0 || rect.GetB() == 0) {
+            // check (3): sides of rectangle must be parallel
+            if (! (nearlyEqual(points[1] - points[0], points[2] - points[3]) &&
+                   nearlyEqual(points[3] - points[0], points[2] - points[1])) ) {
                 continue;
             }
 
-            // compare surface normals
-            if (aCheckNormals) {
-                if (! nearlyEqual(tri1.GetN3(), tri2.GetN3())) {
-                    mismatching_normals++;
-                    continue;
-                }
-                if (! nearlyEqual(tri1.GetN3(), rect.GetN3())) {
-                    rect.FlipSurface();  // try inverted normal
+            KGRectangle rect;
+            try {
+                rect = KGRectangle(points[0], points[1], points[2], points[3]);
+            }
+            catch (...) {
+                coremsg(eDebug) << "merged rectangle is not parallel for triangles " << i << "," << j << eom;
+                continue;
+            }
 
-                    if (! nearlyEqual(tri1.GetN3(), rect.GetN3())) {
-                        coremsg(eWarning) << "merged rectangle does not match normals of triangles " << i << "," << j << eom;
-                        mismatching_normals++;
-                        continue;
-                    }
+            // check(4): normal of rectangle must match triangle's
+            if (aCheckNormals & ! nearlyEqual(tri1.GetN3(), rect.GetN3())) {
+                rect.FlipSurface();  // try inverted normal
+
+                if (! nearlyEqual(tri1.GetN3(), rect.GetN3())) {
+                    coremsg(eDebug) << "merged rectangle does not match normals of triangles " << i << "," << j << eom;
+                    continue;
                 }
             }
 
+#ifdef USE_OPENMP
+#pragma omp critical
+#endif
             // mark input surfaces as merged -> will be ignored in following loops
-            merged_faces[i] = true;
-            merged_faces[j] = true;
-            is_merged = true;
+            if (! is_merged) {
+                merged_faces[i] = true;
+                merged_faces[j] = true;
+                is_merged = true;
 
-            rectangles_out.push_back(rect);
-            break;
+                rectangles_out.push_back(rect);
+                merged_count++;
+            }
         }
 
+#ifdef USE_OPENMP
+#pragma omp critical
+#endif
         // if no match was found, simply copy triangle from input
         if (! is_merged) {
             triangles_out.push_back(tri1);
@@ -529,18 +598,20 @@ void KGTriangleMerger::mergeFaces(bool aCheckNormals)
 
     // rectangles from input are just copied over
     for (size_t i = 0; i < fRectangles.size(); ++i) {
+
         if (i % 100 == 0) {
             size_t ifull = i + fTriangles.size();
-            progressBar(ifull, total_faces) << " (scanned: " << ifull << ", merged: " << merged_faces.size() << ")" << std::flush;
+            progressBar(ifull, total_faces) << " (scanned: " << ifull << ", merged: " << merged_count << ")" << std::flush;
         }
 
         auto& rect = fRectangles[i];
+
         rectangles_out.push_back(rect);
     }
 
-    progressBar(total_faces) << " (merged: " << merged_faces.size() << ")" << std::endl;  // finalize
+    progressBar(total_faces) << " (scanned: " << total_faces << ", merged: " << merged_count << ")" << std::endl;  // finalize
 
-    coremsg(eInfo) << merged_faces.size() << "triangles were merged (" << mismatching_normals << " mismatching normals)" << eom;
+    coremsg(eInfo) << merged_count << " triangles were merged" << eom;
 
     // replace buffers with merge result
     fTriangles = std::move(triangles_out);
@@ -550,32 +621,41 @@ void KGTriangleMerger::mergeFaces(bool aCheckNormals)
 /// application
 int main(int argc, char** argv)
 {
-
     if (argc < 3) {
-        cout << "usage: ./MergeTriangles  [--ascii] [--ignore-normals] [--no-merge] <input_file> <output_file> [max_faces]" << endl;
+        cout << "usage: ./MergeTriangles [-v] [--ascii] [--only-rectangles] [--ignore-normals] [--ignore-distance] <input_file> <output_file> [max_faces]" << endl;
         cout << "  Merge triangles from STL or PLY mesh file into rectangls where possible; save result as PLY file." << endl;
         return -1;
     }
 
+    bool verbose = true;
     bool useAscii = false;
     bool checkNormals = true;
-    bool noMerge = false;
+    bool checkDistance = true;
+    bool saveOnlyRectangles = false;
     int maxFaces = 0;
     string tInputFilename;
     string tOutputFilename;
 
     // parse command line arguments
     for (int i = 1; i < argc; ++i) {
+        if (argv[i] == string("--verbose") || argv[i] == string("-v")) {
+            verbose = true;
+            continue;
+        }
         if (argv[i] == string("--ascii") || argv[i] == string("-a")) {
             useAscii = true;
             continue;
         }
-        if (argv[i] == string("--ignore-normals") || argv[i] == string("-i")) {
-            checkNormals = true;
+        if (argv[i] == string("--ignore-normals") || argv[i] == string("-N")) {
+            checkNormals = false;
             continue;
         }
-        if (argv[i] == string("--no-merge") || argv[i] == string("-n")) {
-            noMerge = true;
+        if (argv[i] == string("--ignore-distance") || argv[i] == string("-D")) {
+            checkDistance = false;
+            continue;
+        }
+        if (argv[i] == string("--only-rectangles") || argv[i] == string("-R")) {
+            saveOnlyRectangles = true;
             continue;
         }
         if (tInputFilename.empty()) {
@@ -594,9 +674,14 @@ int main(int argc, char** argv)
         }
     }
 
+    KMessageTable::GetInstance().SetTerminalVerbosity(verbose ? KMessageSeverity::eDebugMessage : KMessageSeverity::eInfoMessage);
+
     // perform conversion
     KGTriangleMerger converter;
 
+    auto tStart = clock();
+
+    coremsg(eNormal) << "Reading input file: " << tInputFilename << eom;
     if (tInputFilename.substr(tInputFilename.size() - 4) == ".stl") {
         converter.readStlFile(tInputFilename, maxFaces);
     }
@@ -607,20 +692,34 @@ int main(int argc, char** argv)
         coremsg(eError) << "Unrecognized file format: " << tInputFilename << eom;
     }
 
-    coremsg(eNormal) << "input file <" << tInputFilename << "> contains <"
+    coremsg(eNormal)   << "Input file <" << tInputFilename << "> contains <"
                      << converter.GetTriangles().size() << "> triangles and <"
-                     << converter.GetRectangles().size() << "> rectangles" << eom;
+                     << converter.GetRectangles().size() << "> rectangles." << eom;
 
-    if (! noMerge) {
-        converter.mergeFaces(checkNormals);
+    coremsg(eNormal) << "Merging triangles ..."
+#ifdef USE_OPENMP
+                     << " (OpenMP enabled, " << omp_get_max_threads() << " threads)"
+#endif
+                     << eom;
+
+    converter.mergeFaces(checkNormals, checkDistance);
+
+    if (saveOnlyRectangles) {
+        converter.GetTriangles().clear();
     }
 
+    coremsg(eNormal) << "Writing output file: " << tOutputFilename << " (" << (useAscii ? "ASCII" : "binary") << " format)" << eom;
     converter.writePlyFile(tOutputFilename, useAscii ? happly::DataFormat::ASCII : happly::DataFormat::Binary);
 
-    coremsg(eNormal) << "output file <" << tOutputFilename << "> contains <"
+    coremsg(eNormal)   << "Output file <" << tOutputFilename << "> contains <"
                      << converter.GetTriangles().size() << "> triangles and <"
                      << converter.GetRectangles().size() << "> rectangles with <"
-                     << converter.GetVertices().size() << "> vertices" << eom;
+                     << converter.GetVertices().size() << "> vertices." << eom;
+
+    auto tStop = clock();
+    auto tWalltime = ((double) (tStop - tStart)) / CLOCKS_PER_SEC;  // time in seconds
+
+    coremsg(eInfo) << "The conversion took " << tWalltime << " seconds." << eom;
 
     return 0;
 }
