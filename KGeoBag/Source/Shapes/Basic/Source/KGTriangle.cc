@@ -5,14 +5,16 @@ using katrin::KThreeVector;
 namespace KGeoBag
 {
 
-KGTriangle::KGTriangle(const double& a, const double& b, const KThreeVector& p0, const KThreeVector& n1,
-                         const KThreeVector& n2) :
-    fA(a),
-    fB(b),
-    fP0(p0),
-    fN1(n1),
-    fN2(n2)
-{}
+KGTriangle::KGTriangle(const double& a, const double& b, const KThreeVector& p0,
+                       const KThreeVector& n1, const KThreeVector& n2)
+{
+    fA = a;
+    fB = b;
+    fP0 = p0;
+    fN1 = n1;
+    fN2 = n2;
+    Update();
+}
 
 KGTriangle::KGTriangle(const KThreeVector& p0, const KThreeVector& p1, const KThreeVector& p2)
 {
@@ -23,6 +25,7 @@ KGTriangle::KGTriangle(const KThreeVector& p0, const KThreeVector& p1, const KTh
     fN2 = p2 - p0;
     fB = fN2.Magnitude();
     fN2 = fN2.Unit();
+    Update();
 }
 
 KGTriangle::KGTriangle(const KGTriangle& t) :
@@ -39,6 +42,9 @@ KGTriangle& KGTriangle::operator=(const KGTriangle& t)
     fP0 = t.fP0;
     fN1 = t.fN1;
     fN2 = t.fN2;
+    fN3 = t.fN3;
+    Update();
+
     return *this;
 }
 

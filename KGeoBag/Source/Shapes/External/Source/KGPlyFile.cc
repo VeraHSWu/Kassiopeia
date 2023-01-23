@@ -190,7 +190,7 @@ void KGPlyFile::ReadPlyFile() const
         }
     }
     else {
-        tFile = string(DATA_DEFAULT_DIR) + string("/") + GetName() + string(".vtp");
+        tFile = string(DATA_DEFAULT_DIR) + string("/") + GetName() + string(".ply");
     }
 
     coremsg_debug("reading elements from Ply file <" << tFile << ">" << eom);
